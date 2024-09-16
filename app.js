@@ -132,7 +132,8 @@ app.post('/api/submit-quiz', async (req, res) => {
 
   try {
     // Extract userId from token
-    const token = req.headers.token;
+    const authHeader = req.headers.authorization;
+    const token = authHeader && authHeader.startsWith('Bearer ') ? authHeader.split(' ')[1] : null;
     if (!token) {
       return res.status(401).json({ message: 'No token provided' });
     }
@@ -153,7 +154,7 @@ app.post('/api/submit-quiz', async (req, res) => {
       return acc;
     }, {});
 
-    // Evaluate answers
+    // Evaluate answers and calculate score
     let score = 0;
     const results = answers.map(answer => {
       const correctAnswer = correctAnswersMap[answer.questionId];
@@ -172,21 +173,25 @@ app.post('/api/submit-quiz', async (req, res) => {
     // Save submission to the database with the userId
     const newSubmission = new Submission({
       week,
-      userId, // Store the user ID with the submission
-      answers
+      userId,
+      answers,
+      score,
+      submissionTime: new Date(), // Save submission time
     });
     await newSubmission.save();
 
     res.json({
       score,
       totalQuestions: questions.length,
-      results, // Include detailed results
+      results,
     });
   } catch (error) {
-    console.error('Error processing quiz submission:', error);
+    console.error('Error processing quiz submission:', error.message);
     res.status(500).json({ message: 'Error processing quiz submission', error: error.message });
   }
 });
+
+
 
 // Start the server
 
