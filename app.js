@@ -2,10 +2,11 @@ const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
 const jwt = require("jsonwebtoken");
+const bcrypt = require("bcrypt");
 // Import the Question model
 const Question = require('./models/Question');
 const Submission=require('./models/Submission');
-
+const userModel = require("./models/users");
 // Initialize the Express app
 const app = express();
 app.use(express.json());
