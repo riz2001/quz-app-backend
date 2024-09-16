@@ -191,6 +191,26 @@ app.post('/api/submit-quiz', async (req, res) => {
   }
 });
 
+// Route to get submissions for a specific week
+app.get('/api/submissions/:week', async (req, res) => {
+  const weekNumber = req.params.week;
+
+  try {
+    const submissions = await Submission.find({ week: weekNumber })
+      .populate('userId', 'email name admissionno') // Populate user details
+      .exec();
+
+    if (!submissions.length) {
+      return res.status(404).json({ message: 'No submissions found for this week' });
+    }
+
+    res.json(submissions);
+  } catch (error) {
+    console.error('Error fetching submissions:', error);
+    res.status(500).json({ message: 'Error fetching submissions', error: error.message });
+  }
+});
+
 
 
 // Start the server
