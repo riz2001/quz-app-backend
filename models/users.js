@@ -9,9 +9,12 @@ const userSchema = new mongoose.Schema({
     {
       timeSlot: { type: String, required: true },
       date: { type: Date, required: true },
+      meetingLink: String
+     
     },
   ],
 });
 
 const userModel = mongoose.model('User', userSchema);
 module.exports = userModel;
+

@@ -291,45 +291,155 @@ app.get('/api/offcampussubmissions', async (req, res) => {
 
 
 // Route to get user details (name, admission number, email)
+// Fetch users with additional timeSlots field
 app.get("/api/users", async (req, res) => {
   try {
-    const users = await userModel.find({}, { name: 1, admissionno: 1, email: 1, _id: 1 }); // Fetch name, admission no, and email
+    const users = await userModel.find({}, { 
+      name: 1, 
+      admissionno: 1, 
+      email: 1, 
+      _id: 1, 
+      timeSlots: 1 
+    });
     res.json(users);
   } catch (error) {
-    res.json({ "status": "error", "message": error.message });
+    res.json({ status: "error", message: error.message });
   }
 });
 
+// Add time slot with meeting link
 app.post('/api/addtimeslot', async (req, res) => {
-  const { userId, timeSlot, date } = req.body;
+  const { userId, timeSlot, date, meetingLink } = req.body;
 
   try {
-    // Find the user and push the new time slot into the timeSlots array
-    await userModel.findByIdAndUpdate(userId, {
-      $push: {
-        timeSlots: { timeSlot, date },
-      },
-    });
-
-    res.json({ status: 'success', message: 'Time slot added!' });
-  } catch (error) {
-    res.status(500).json({ status: 'error', message: error.message });
-  }
-});
-
-app.get('/api/users/:userId/timeslots', async (req, res) => {
-  const { userId } = req.params; // Extract userId from the URL
-
-  try {
-    const user = await userModel.findById(userId, { timeSlots: 1 }); // Fetch only the timeSlots field
+    // Find the user by userId
+    const user = await userModel.findById(userId);
     if (!user) {
       return res.status(404).json({ status: 'error', message: 'User not found' });
     }
-    res.json(user.timeSlots); // Send the time slots as the response
+
+    // Check if the time slot for the given month is already booked
+    const month = new Date(date).getMonth();
+    const year = new Date(date).getFullYear();
+
+    const isSlotBooked = user.timeSlots.some(slot => {
+      const slotDate = new Date(slot.date);
+      return slotDate.getMonth() === month && slotDate.getFullYear() === year;
+    });
+
+    if (isSlotBooked) {
+      return res.status(400).json({ status: 'error', message: 'Time slot already booked for this month.' });
+    }
+
+    // Push the new time slot into the timeSlots array
+    user.timeSlots.push({ timeSlot, date, meetingLink });
+    await user.save(); // Save the user document
+
+    res.json({ status: 'success', message: 'Time slot added!', slotId: user.timeSlots[user.timeSlots.length - 1]._id }); // Return the new slot ID
   } catch (error) {
     res.status(500).json({ status: 'error', message: error.message });
   }
 });
+
+
+
+  app.get('/api/users/:userId/timeslots', async (req, res) => {
+    const { userId } = req.params; // Extract userId from the URL
+
+    try {
+      const user = await userModel.findById(userId, { timeSlots: 1 }); // Fetch only the timeSlots field
+      if (!user) {
+        return res.status(404).json({ status: 'error', message: 'User not found' });
+      }
+      res.json(user.timeSlots); // Send the time slots as the response
+    } catch (error) {
+      res.status(500).json({ status: 'error', message: error.message });
+    }
+  });
+
+
+// Fetch distinct months (you may want to adjust this based on your data structure)
+app.get('/api/months', async (req, res) => {
+  try {
+    const users = await userModel.find({}, { timeSlots: 1 });
+    const months = new Set();
+
+    users.forEach(user => {
+      user.timeSlots.forEach(slot => {
+        const date = new Date(slot.date);
+        const monthYear = `${date.getFullYear()}-${date.getMonth() + 1}`;
+        months.add(monthYear);
+      });
+    });
+
+    res.json(Array.from(months)); // Return an array of unique month-year strings
+  } catch (error) {
+    res.status(500).json({ status: 'error', message: error.message });
+  }
+});
+
+// Fetch time slots for a specific month
+app.get('/api/timeslots/:month', async (req, res) => {
+  const { month } = req.params; // e.g., "2024-9"
+  const [year, monthNumber] = month.split('-').map(Number);
+
+  try {
+    const users = await userModel.find({});
+    const timeSlots = [];
+
+    users.forEach(user => {
+      user.timeSlots.forEach(slot => {
+        const slotDate = new Date(slot.date);
+        if (slotDate.getFullYear() === year && slotDate.getMonth() + 1 === monthNumber) {
+          timeSlots.push({ ...slot, userId: user._id }); // Include userId for marking attended
+        }
+      });
+    });
+
+    res.json(timeSlots);
+  } catch (error) {
+    res.status(500).json({ status: 'error', message: error.message });
+  }
+});
+
+// Mark time slot as attended
+app.post('/api/attendSlot', async (req, res) => {
+  const { userId, slotId } = req.body;
+
+  try {
+    const user = await userModel.findById(userId);
+    if (!user) {
+      return res.status(404).json({ status: 'error', message: 'User not found' });
+    }
+
+    const slot = user.timeSlots.id(slotId); // Find the specific slot by ID
+    if (!slot) {
+      return res.status(404).json({ status: 'error', message: 'Time slot not found' });
+    }
+
+    // Update the slot to mark it as attended (you can add a property to track attended status)
+    slot.attended = true; // Example property to track attended status
+    await user.save();
+
+    res.json({ status: 'success', message: 'Time slot marked as attended!' });
+  } catch (error) {
+    res.status(500).json({ status: 'error', message: error.message });
+  }
+});
+
+
+
+
+  
+
+
+  
+  
+  
+  
+  
+  
+  
 // Start the server
 
 app.listen(5050, () => {
