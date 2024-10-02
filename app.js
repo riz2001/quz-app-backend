@@ -145,7 +145,6 @@ app.get('/api/questions/:week', async (req, res) => {
 app.post('/api/submit-quiz', async (req, res) => {
   const { week, answers } = req.body;
 
-  // Ensure answers are provided
   if (!Array.isArray(answers) || answers.length === 0) {
     return res.status(400).json({ message: 'No answers provided' });
   }
@@ -161,14 +160,9 @@ app.post('/api/submit-quiz', async (req, res) => {
     const decoded = jwt.verify(token, 'quiz');
     const userId = decoded.userId;
 
-    // Check if the user has already submitted the quiz for this week
-    const existingSubmission = await Submission.findOne({ week, userId });
-    if (existingSubmission) {
-      return res.status(400).json({ message: 'You have already submitted this quiz.' });
-    }
-
     // Fetch questions for the specified week
     const questions = await Question.find({ week });
+
     if (!questions.length) {
       return res.status(404).json({ message: 'No questions found for this week' });
     }
@@ -205,13 +199,11 @@ app.post('/api/submit-quiz', async (req, res) => {
     });
     await newSubmission.save();
 
-    // Respond with quiz results
     res.json({
       score,
       totalQuestions: questions.length,
       results,
     });
-
   } catch (error) {
     console.error('Error processing quiz submission:', error.message);
     res.status(500).json({ message: 'Error processing quiz submission', error: error.message });
@@ -227,6 +219,8 @@ app.get('/api/submissions/:week', async (req, res) => {
       .populate('userId', 'email name admissionno') // Populate user details
       .exec();
 
+    console.log(submissions); // Log submissions to debug population
+
     if (!submissions.length) {
       return res.status(404).json({ message: 'No submissions found for this week' });
     }
@@ -237,6 +231,8 @@ app.get('/api/submissions/:week', async (req, res) => {
     res.status(500).json({ message: 'Error fetching submissions', error: error.message });
   }
 });
+
+
 
 
 const storage = multer.diskStorage({
@@ -359,6 +355,81 @@ app.post('/api/addtimeslot', async (req, res) => {
 
 
 // Fetch distinct months (you may want to adjust this based on your data structure)
+
+
+  
+
+
+
+
+
+// Fetch users with additional timeSlots field
+app.get("/api/users", async (req, res) => {
+  try {
+    const users = await userModel.find({}, { 
+      name: 1, 
+      admissionno: 1, 
+      email: 1, 
+      _id: 1, 
+      timeSlots: 1 
+    });
+    res.json(users);
+  } catch (error) {
+    res.json({ status: "error", message: error.message });
+  }
+});
+
+// Add time slot with meeting link
+app.post('/api/addtimeslot', async (req, res) => {
+  const { userId, timeSlot, date, meetingLink } = req.body; // Add meetingLink to the request body
+
+  try {
+    // Find the user
+    const user = await userModel.findById(userId);
+
+    // Check if the time slot for the given month is already booked
+    const month = new Date(date).getMonth();
+    const year = new Date(date).getFullYear();
+
+    const isSlotBooked = user.timeSlots.some(slot => {
+      const slotDate = new Date(slot.date);
+      return slotDate.getMonth() === month && slotDate.getFullYear() === year;
+    });
+
+    if (isSlotBooked) {
+      return res.status(400).json({ status: 'error', message: 'Time slot already booked for this month.' });
+    }
+
+    // If not booked, push the new time slot and meeting link into the timeSlots array
+    await userModel.findByIdAndUpdate(userId, {
+      $push: {
+        timeSlots: { timeSlot, date, meetingLink }, // Store the meetingLink along with timeSlot and date
+      },
+    });
+
+    res.json({ status: 'success', message: 'Time slot added!' });
+  } catch (error) {
+    res.status(500).json({ status: 'error', message: error.message });
+  }
+});
+
+// Fetch distinct months (you may want to adjust this based on your data structure)
+
+app.get('/api/users', async (req, res) => {
+  try {
+    const users = await userModel.find({}, { 
+      name: 1, 
+      admissionno: 1, 
+      email: 1, 
+      _id: 1, 
+      timeSlots: 1 
+    });
+    res.json(users);
+  } catch (error) {
+    res.json({ status: 'error', message: error.message });
+  }
+});
+  
 app.get('/api/months', async (req, res) => {
   try {
     const users = await userModel.find({}, { timeSlots: 1 });
@@ -367,43 +438,52 @@ app.get('/api/months', async (req, res) => {
     users.forEach(user => {
       user.timeSlots.forEach(slot => {
         const date = new Date(slot.date);
-        const monthYear = `${date.getFullYear()}-${date.getMonth() + 1}`;
+        const monthYear = `${date.getFullYear()}-${date.getMonth() + 1}`; // Format: YYYY-MM
         months.add(monthYear);
       });
     });
 
-    res.json(Array.from(months)); // Return an array of unique month-year strings
+    res.json(Array.from(months)); // Return unique months as an array
   } catch (error) {
     res.status(500).json({ status: 'error', message: error.message });
   }
 });
 
-// Fetch time slots for a specific month
+// Get time slots for a specific month
 app.get('/api/timeslots/:month', async (req, res) => {
   const { month } = req.params; // e.g., "2024-9"
   const [year, monthNumber] = month.split('-').map(Number);
 
   try {
-    const users = await userModel.find({});
+    const users = await userModel.find({}, { name: 1, email: 1, admissionno: 1, timeSlots: 1 });
     const timeSlots = [];
 
     users.forEach(user => {
       user.timeSlots.forEach(slot => {
         const slotDate = new Date(slot.date);
         if (slotDate.getFullYear() === year && slotDate.getMonth() + 1 === monthNumber) {
-          timeSlots.push({ ...slot, userId: user._id }); // Include userId for marking attended
+          timeSlots.push({ 
+            _id: slot._id, 
+            timeSlot: slot.timeSlot, 
+            date: slot.date, 
+            attended: slot.attended, // Include attended status
+            userId: user._id, 
+            name: user.name, 
+            email: user.email, 
+            admissionno: user.admissionno 
+          });
         }
       });
     });
 
-    res.json(timeSlots);
+    res.json(timeSlots); // Return the time slots along with user details
   } catch (error) {
     res.status(500).json({ status: 'error', message: error.message });
   }
 });
 
-// Mark time slot as attended
-app.post('/api/attendSlot', async (req, res) => {
+// Mark a time slot as attended
+app.post('/api/markattended', async (req, res) => {
   const { userId, slotId } = req.body;
 
   try {
@@ -412,13 +492,13 @@ app.post('/api/attendSlot', async (req, res) => {
       return res.status(404).json({ status: 'error', message: 'User not found' });
     }
 
-    const slot = user.timeSlots.id(slotId); // Find the specific slot by ID
+    const slot = user.timeSlots.id(slotId);
     if (!slot) {
-      return res.status(404).json({ status: 'error', message: 'Time slot not found' });
+      return res.status(404).json({ status: 'error', message: 'Slot not found' });
     }
 
-    // Update the slot to mark it as attended (you can add a property to track attended status)
-    slot.attended = true; // Example property to track attended status
+    // Mark the slot as attended
+    slot.attended = true;
     await user.save();
 
     res.json({ status: 'success', message: 'Time slot marked as attended!' });
@@ -427,18 +507,6 @@ app.post('/api/attendSlot', async (req, res) => {
   }
 });
 
-
-
-
-  
-
-
-  
-  
-  
-  
-  
-  
   
 // Start the server
 
