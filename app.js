@@ -3,11 +3,18 @@ const mongoose = require('mongoose');
 const cors = require('cors');
 const jwt = require("jsonwebtoken");
 const bcrypt = require("bcrypt");
+const { spawn } = require('child_process');
 // Import the Question model
 const Question = require('./models/Question');
 const Submission=require('./models/Submission');
 const userModel = require("./models/users");
 const Jobsubmission = require("./models/Jobsubmissions");
+const Cquestions= require("./models/Cquestion");
+const bodyParser = require('body-parser');
+const { exec } = require('child_process');
+const fs = require('fs');
+const CompilerSubmission = require('./models/CompilerSubmission');
+
 
 
 const multer = require('multer');
@@ -15,6 +22,7 @@ const multer = require('multer');
 const app = express();
 app.use(express.json());
 app.use(cors());
+app.use(bodyParser.json());
 app.use('/uploads', express.static('uploads')); // Serve the uploads folder
 
 
@@ -30,60 +38,110 @@ mongoose.connect('mongodb+srv://rizwan2001:rizwan2001@cluster0.6ucejfl.mongodb.n
 
 
 
-  app.post("/signin", async (req, res) => {
-    try {
-        const { email, password } = req.body;
-        const user = await userModel.findOne({ email });
 
-        if (user) {
-            const passwordValid = bcrypt.compareSync(password, user.password);
-            if (passwordValid) {
-                const token = jwt.sign({ userId: user._id }, "quiz", { expiresIn: "1d" });
 
-                // Return user details along with the token
-                res.json({
-                    status: "success",
-                    token: token,
-                    user: {
-                        _id: user._id,
-                        name: user.name,
-                        admissionno: user.admissionno,
-                        email: user.email,
-                        timeSlot: user.timeSlot || "", // Use existing timeSlot or empty string
-                        date: user.date || "",         // Use existing date or empty string
-                    },
-                });
-            } else {
-                res.json({ status: "incorrect password" });
-            }
-        } else {
-            res.json({ status: "invalid email id" });
-        }
-    } catch (error) {
-        res.json({ status: "error", message: error.message });
-    }
+// Sign-In Route
+app.post("/signin", async (req, res) => {
+  try {
+      const { email, password } = req.body;
+      const user = await userModel.findOne({ email });
+
+      if (user) {
+          // Check if the user is approved
+          if (!user.approved) {
+              // If the user is not approved, send the specific message
+              return res.json({ status: "User is not approved by admin" });
+          }
+
+          // Check if the password is correct
+          const passwordValid = bcrypt.compareSync(password, user.password);
+          if (passwordValid) {
+              const token = jwt.sign({ userId: user._id }, "quiz", { expiresIn: "1d" });
+
+              // Return user details along with the token
+              res.json({
+                  status: "success",
+                  token: token,
+                  user: {
+                      _id: user._id,
+                      name: user.name,
+                      admissionno: user.admissionno,
+                      email: user.email,
+                      timeSlot: user.timeSlot || "", // Use existing timeSlot or empty string
+                      date: user.date || "",         // Use existing date or empty string
+                  },
+              });
+          } else {
+              res.json({ status: "incorrect password" });
+          }
+      } else {
+          res.json({ status: "invalid email id" });
+      }
+  } catch (error) {
+      res.json({ status: "error", message: error.message });
+  }
 });
 
 
-// User Sign-Up
+// Sign-Up Route
 app.post("/signup", async (req, res) => {
-    try {
-        const { email, password } = req.body;
-        const hashedPassword = bcrypt.hashSync(password, 10);
+  try {
+      // Destructure fields from request body
+      const { email, password, phoneno, rollno, name, admissionno, semester } = req.body; // Include semester
+      
+      // Hash the password
+      const hashedPassword = bcrypt.hashSync(password, 10);
 
-        const existingUser = await userModel.findOne({ email });
-        if (existingUser) {
-            res.json({ "status": "email id already exists" });
-        } else {
-            req.body.password = hashedPassword;
-            const newUser = new userModel(req.body);
-            await newUser.save();
-            res.json({ "status": "success" });
-        }
-    } catch (error) {
-        res.json({ "status": "error", "message": error.message });
-    }
+      // Check if the email already exists
+      const existingUser = await userModel.findOne({ email: { $regex: new RegExp(`^${email}$`, 'i') } });
+      if (existingUser) {
+          return res.json({ status: "email id already exists" });
+      }
+
+      // Create a new user with the provided details
+      const newUser = new userModel({
+          name,
+          admissionno,
+          phoneno,
+          rollno, // Save rollno in the database
+          semester, // Save semester in the database
+          email: email.toLowerCase(),
+          password: hashedPassword,
+          approved: false,
+      });
+
+      // Save the new user to the database
+      await newUser.save();
+      res.json({ status: "success", message: "User registered. Awaiting approval." });
+  } catch (error) {
+      res.json({ status: "error", message: error.message });
+  }
 });
+
+
+
+// Route to get all unapproved users
+app.get("/unapproved-users", async (req, res) => {
+  try {
+      const users = await userModel.find({ approved: false }); // Fetch only unapproved users
+      res.json({ users });
+  } catch (error) {
+      res.json({ status: "error", message: error.message });
+  }
+});
+
+
+// Route to approve a user by ID
+app.put("/approve/:id", async (req, res) => {
+  try {
+      await userModel.findByIdAndUpdate(req.params.id, { approved: true });
+      res.json({ message: "User approved successfully" });
+  } catch (error) {
+      res.json({ status: "error", message: error.message });
+  }
+});
+
+
 
 // Correct the route method to GET to fetch weeks
 app.get('/api/weeks', async (req, res) => {
@@ -229,6 +287,30 @@ app.get('/api/submissions/:week', async (req, res) => {
   } catch (error) {
     console.error('Error fetching submissions:', error);
     res.status(500).json({ message: 'Error fetching submissions', error: error.message });
+  }
+});
+
+// Fetch user submissions
+app.get("/api/submissionsss", async (req, res) => {
+  try {
+    const userId = req.headers['user-id']; // Retrieve userId from headers
+
+    if (!userId) {
+      return res.status(403).json({ status: "error", message: "User not logged in" });
+    }
+
+    const submissions = await Submission.find({ userId })
+      .select("week score submissionTime")
+      .exec();
+
+    if (!submissions.length) {
+      return res.status(404).json({ status: "error", message: "No submissions found for this user" });
+    }
+
+    res.json({ status: "success", submissions });
+  } catch (error) {
+    console.error("Error fetching submissions:", error);
+    res.status(500).json({ status: "error", message: error.message });
   }
 });
 
@@ -507,7 +589,380 @@ app.post('/api/markattended', async (req, res) => {
   }
 });
 
+
+
+
+
+// Function to execute the code
+const executeCode = (code, language, input, callback) => {
+  const fileName = `Main.${language === 'python' ? 'py' : language === 'java' ? 'java' : 'c'}`;
+  fs.writeFileSync(fileName, code);
+
+  let command, args;
+
+  switch (language) {
+      case 'python':
+          // First, try using 'python', then fallback to 'python3' if 'python' fails
+          command = 'python'; // Try 'python'
+          args = [fileName];
+
+          const pythonProcess = spawn(command, args);
+
+          let pythonOutput = '';
+          let pythonError = '';
+
+          pythonProcess.stdin.write(input); // Pass the input to stdin
+          pythonProcess.stdin.end(); // Close stdin after input is passed
+
+          pythonProcess.stdout.on('data', (data) => {
+              pythonOutput += data.toString();
+          });
+
+          pythonProcess.stderr.on('data', (data) => {
+              pythonError += data.toString();
+          });
+
+          pythonProcess.on('close', (code) => {
+              if (code !== 0 || pythonError) {
+                  // If 'python' fails, fallback to 'python3'
+                  command = 'python'; // Try 'python3'
+                  const python3Process = spawn(command, args);
+
+                  let python3Output = '';
+                  let python3Error = '';
+
+                  python3Process.stdin.write(input); // Pass the input to stdin
+                  python3Process.stdin.end(); // Close stdin after input is passed
+
+                  python3Process.stdout.on('data', (data) => {
+                      python3Output += data.toString();
+                  });
+
+                  python3Process.stderr.on('data', (data) => {
+                      python3Error += data.toString();
+                  });
+
+                  python3Process.on('close', (code) => {
+                      if (code !== 0 || python3Error) {
+                          callback(python3Error || 'Error executing Python code');
+                      } else {
+                          callback(null, python3Output.trim());
+                      }
+                  });
+              } else {
+                  callback(null, pythonOutput.trim());
+              }
+          });
+          return;
+
+      case 'java':
+          // First, compile the Java file
+          command = 'javac';
+          args = [fileName];
+
+          const compileProcess = spawn(command, args);
+
+          compileProcess.on('close', (code) => {
+              if (code !== 0) {
+                  return callback('Error compiling Java code');
+              }
+
+              // If compilation succeeds, execute the compiled Java program
+              command = 'java';
+              args = ['Main']; // The compiled class file name is 'Main'
+
+              const runProcess = spawn(command, args);
+
+              let output = '';
+              let error = '';
+
+              runProcess.stdin.write(input); // Pass the input to stdin
+              runProcess.stdin.end(); // Close stdin after input is passed
+
+              runProcess.stdout.on('data', (data) => {
+                  output += data.toString();
+              });
+
+              runProcess.stderr.on('data', (data) => {
+                  error += data.toString();
+              });
+
+              runProcess.on('close', (code) => {
+                  if (code !== 0 || error) {
+                      callback(error || 'Execution error');
+                  } else {
+                      callback(null, output.trim());
+                  }
+              });
+          });
+          return;
+
+      case 'c':
+          // Compile the C code
+          command = 'gcc';
+          args = [fileName, '-o', 'code']; // Output executable will be named 'code.exe'
+
+          const compileCProcess = spawn(command, args);
+
+          compileCProcess.on('close', (compileCode) => {
+              if (compileCode !== 0) {
+                  return callback('Error compiling C code');
+              }
+
+              // Execute the compiled code (use 'code.exe' on Windows)
+              const runCProcess = spawn('./code.exe'); // For Windows
+
+              let output = '';
+              let error = '';
+
+              runCProcess.stdin.write(input); // Pass input to stdin
+              runCProcess.stdin.end(); // Close stdin after input
+
+              runCProcess.stdout.on('data', (data) => {
+                  output += data.toString();
+              });
+
+              runCProcess.stderr.on('data', (data) => {
+                  error += data.toString();
+              });
+
+              runCProcess.on('close', (runCode) => {
+                  if (runCode !== 0 || error) {
+                      callback(error || 'Execution error');
+                  } else {
+                      callback(null, output.trim());
+                  }
+              });
+          });
+          return;
+
+      default:
+          return callback('Unsupported language');
+  }
+};
+
+// Route to run code
+app.post('/api/compiler/run', (req, res) => {
+  const { code, language, input, expectedOutput } = req.body;
+
+  // Validate input
+  if (!code || !language || expectedOutput === undefined) {
+      return res.status(400).json({ error: 'Code, language, and expected output are required.' });
+  }
+
+  // Run the code with input
+  executeCode(code, language, input, (err, output) => {
+      if (err) {
+          return res.status(500).json({ output: 'Error executing code', error: err });
+      }
+
+      // Trim both output and expectedOutput before comparison
+      const testPassed = output.trim() === expectedOutput.trim();
+
+      res.json({
+          output,
+          result: {
+              expected: expectedOutput,
+              actual: output,
+              passed: testPassed,
+          },
+      });
+  });
+});
+
+
+ // Import your model
+
+app.post('/api/cquestions', (req, res) => {
+    const { title, description, inputFormat, outputFormat, testCases, difficulty, week } = req.body;
+
+    // Check if all required fields are present
+    if (!title || !description || !inputFormat || !outputFormat || !testCases || !difficulty || !week) {
+        return res.status(400).json({ error: 'All fields are required.' });
+    }
+
+    // Create a new question object using the Cquestions model
+    const newcQuestions = new Cquestions({
+        title,
+        description,
+        inputFormat,
+        outputFormat,
+        testCases: testCases.map(tc => ({ input: tc.input, expectedOutput: tc.expectedOutput })), // Map each test case
+        difficulty,
+        week
+    });
+
+    // Save the question to the database
+    newcQuestions.save()
+        .then(() => res.status(201).json({ message: 'Question added successfully!' }))
+        .catch(err => res.status(500).json({ error: err.message }));
+});
+
+
+
+
+// Get all unique weeks from questions
+app.get('/api/cquestions/weeks', async (req, res) => {
+  try {
+      const weeks = await Cquestions.find().distinct('week');
+      res.status(200).json(weeks);
+  } catch (error) {
+      res.status(500).json({ error: 'Error fetching weeks' });
+  }
+});
+
+// Get all questions for a specific week
+app.get('/api/cquestions/week/:week', async (req, res) => {
+  const { week } = req.params;
+  try {
+      const questions = await Cquestions.find({ week });
+      res.status(200).json(questions);
+  } catch (error) {
+      res.status(500).json({ error: 'Error fetching questions for the week' });
+  }
+});
+
+
+
+
+app.use(express.json()); // Middleware to parse JSON requests
+
+// CompilerSubmission endpoint
+
+app.post('/api/compilerSubmissions', async (req, res) => {
+  const { userId, week, questionId, passedCount, totalTestCases, testResults } = req.body;
+
+  // Validate required fields
+  if (!userId || !week || !questionId || passedCount === undefined || !totalTestCases || !testResults) {
+      return res.status(400).json({ error: 'All fields are required.' });
+  }
+
+  try {
+      // Check if the user has already submitted for this week and question
+      const existingSubmission = await CompilerSubmission.findOne({ userId, week, questionId });
+
+      if (existingSubmission) {
+          return res.status(400).json({ error: 'You have already submitted for this week.' });
+      }
+
+      // Get current date and time
+      const submissionDate = new Date(); // Get current date and time
+      const submissionTime = submissionDate.toLocaleTimeString(); // Get submission time as a string
+
+      // Create new submission object
+      const newCompilerSubmission = new CompilerSubmission({
+          userId,
+          week,
+          questionId,
+          passedCount,
+          totalTestCases,
+          testResults,
+          submissionDate,  // Add date to submission
+          submissionTime,   // Add time to submission
+      });
+
+      // Save submission to database
+      await newCompilerSubmission.save();
+      return res.status(201).json({ message: 'Submission recorded successfully!' });
+  } catch (err) {
+      console.error('Error saving submission:', err);
+      return res.status(500).json({ error: 'Failed to record submission. Please try again later.' });
+  }
+});
+
+
+// Submission Route
+// Fetch all submissions grouped by week with user details
+app.get('/api/compilerSubmissionss', async (req, res) => {
+  try {
+      const submissions = await CompilerSubmission.find({})
+          .populate('userId', 'name admissionno') // Populate name and admissionNo from the User model
+      
+      // Group submissions by week
+      const groupedSubmissions = submissions.reduce((acc, submission) => {
+          const week = submission.week;
+          if (!acc[week]) {
+              acc[week] = [];
+          }
+          acc[week].push({
+              _id: submission._id,
+              userId: submission.userId._id,
+              name: submission.userId.name,
+              admissionno: submission.userId.admissionno,
+              passedCount: submission.passedCount,
+              totalTestCases: submission.totalTestCases,
+          });
+          return acc;
+      }, {});
+
+      res.json(groupedSubmissions);
+  } catch (err) {
+      console.error('Error fetching submissions:', err);
+      res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
+
+
+// Endpoint to fetch submissions for a specific week
+// Fetch submissions for a specific week with user details
+app.get('/api/compilerSubmissions/week/:week', async (req, res) => {
+  const { week } = req.params;
   
+  try {
+      // Fetch submissions for the given week, populating user details
+      const submissions = await CompilerSubmission.find({ week: parseInt(week) })
+          .populate('userId', 'name admissionno email'); // Add any other fields as needed
+      
+      if (!submissions.length) {
+          return res.status(404).json({ message: `No submissions found for week ${week}` });
+      }
+
+      // Prepare the response data
+      const submissionData = submissions.map(submission => ({
+          _id: submission._id,
+          userId: submission.userId._id,
+          name: submission.userId.name,
+          admissionno: submission.userId.admissionno,
+          email: submission.userId.email,
+          passedCount: submission.passedCount,
+          totalTestCases: submission.totalTestCases,
+          submissionTime: submission.submissionDate
+      }));
+
+      // Debug to ensure correct data is fetched
+      console.log(`Submissions for Week ${week}:`, submissionData);
+
+      res.json(submissionData);
+  } catch (err) {
+      console.error('Error fetching submissions for week:', err);
+      res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
+
+
+// Fetch user compiler submissions
+app.get('/api/compiler-submissionsss', async (req, res) => {
+  try {
+      // Retrieve userId from session storage or request headers
+      const userId = req.headers['user-id'] // Adjust this if you're using a different method
+
+      // Fetch submissions for the logged-in user
+      const submissions = await CompilerSubmission.find({ userId })
+          .select('week submissionDate passedCount totalTestCases') // Select only the fields you need
+          .exec();
+
+      // Check if submissions were found
+      if (!submissions.length) {
+          return res.status(404).json({ message: 'No submissions found for this user' });
+      }
+
+      res.json({ status: 'success', submissions });
+  } catch (error) {
+      console.error('Error fetching compiler submissions:', error);
+      res.status(500).json({ status: 'error', message: error.message });
+  }
+});
+
 // Start the server
 
 app.listen(5050, () => {
